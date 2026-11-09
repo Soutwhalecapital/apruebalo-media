@@ -21,7 +21,7 @@ Cada 30 minutos, entre las 12:00 y las 21:59 hora de Chile, el flujo `.github/wo
 | Archivo | Para qué |
 | --- | --- |
 | `programador/publicar.py` | El script. Solo usa la biblioteca estándar de Python. |
-| `programador/desde.txt` | Fecha desde la que publica (AAAA-MM-DD). Hoy: 2026-11-16. |
+| `programador/desde.txt` | Fecha desde la que publica (AAAA-MM-DD). Hoy: 2026-11-13, la fecha de la prueba real con H-2026-11-13 (decidido el 09-11-2026); si sale bien, sigue con el 14 y el 15. |
 | `programador/activo.txt` | Interruptor. Si existe, el flujo programado publica; si no, está en pausa. El contenido da lo mismo. |
 | `programador/registro.csv` | Un renglón por intento: `ID;programada;publicada;atraso_min;media_id;estado;error`. |
 | `programador/test_publicar.py` | Pruebas. |
@@ -37,7 +37,7 @@ GitHub puede atrasar una corrida programada unos minutos. No importa: la ventana
 
 Los CSV se pisan: por ejemplo, tanda-1 y tanda-3 tienen los dos un H-2026-11-17, y tanda-2 y tanda-3 un H-2026-12-02, con imágenes distintas. La regla es: **para cada fecha se usa solo la fila del CSV de la tanda con el número más alto que tenga esa fecha.** Así sale una sola Historia por día.
 
-Con los CSV de hoy, desde el 16-11 quedan 34 Historias: del 16-11 al 13-12 todas salen de tanda-3 (como dice el informe del Pedido 8), y el 16, 19, 22, 26, 28 y 30 de diciembre, de tanda-2.
+Con los CSV de hoy, desde el 13-11 quedan 37 Historias: del 13-11 al 13-12 todas salen de tanda-3 (como dice el informe del Pedido 8), y el 16, 19, 22, 26, 28 y 30 de diciembre, de tanda-2.
 
 Si agregas una `tanda-4/historias-programables.csv`, entra sola y manda sobre las anteriores en las fechas que tenga. Las filas cuyo `tipo` no sea Historia se ignoran. Si la tanda ganadora trae dos filas para la misma fecha, el script se detiene con un error claro en vez de adivinar.
 
