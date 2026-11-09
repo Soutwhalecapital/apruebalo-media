@@ -1,0 +1,70 @@
+# Programador propio de Apruébalo, fase 1 (Pedido 9): publica las Historias de
+# Instagram con la Graph API de Meta. Detalle en programador/README.md.
+name: Programador de Historias
+
+on:
+  schedule:
+    # Hora de Chile: minutos 7 y 37 de cada hora entre las 12:00 y las 21:59.
+    # Se evita el minuto 0 porque GitHub atrasa las ejecuciones al empezar cada hora.
+    # GitHub acepta "timezone" con nombres IANA y sigue solo el cambio de horario.
+    - cron: '7,37 12-21 * * *'
+      timezone: 'America/Santiago'
+  workflow_dispatch:
+    inputs:
+      simular:
+        description: 'Simular: lista y valida el acceso, pero no crea ni publica nada'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: programador-historias
+  cancel-in-progress: false
+
+jobs:
+  historias:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Se trae la rama principal al día (no el commit que disparó la corrida), para
+      # leer el registro que dejó la corrida anterior y no publicar dos veces.
+      - name: Traer el repositorio
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Publicar Historias
+        env:
+          META_TOKEN: ${{ secrets.META_TOKEN }}
+          EVENTO: ${{ github.event_name }}
+          SIMULAR: ${{ inputs.simular }}
+        run: |
+          opciones=()
+          if [ "$EVENTO" = "schedule" ]; then opciones+=(--programado); fi
+          if [ "$EVENTO" = "workflow_dispatch" ] && [ "$SIMULAR" = "true" ]; then opciones+=(--simular); fi
+          echo "Evento: $EVENTO. Opciones: ${opciones[*]:-(ninguna: corrida manual real)}"
+          python3 programador/publicar.py "${opciones[@]}"
+
+      # Corre siempre, también si la publicación falló, para guardar el error.
+      - name: Guardar el registro
+        if: always()
+        env:
+          RAMA: ${{ github.event.repository.default_branch }}
+        run: |
+          if git diff --quiet -- programador/registro.csv; then
+            echo "El registro no cambió."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add programador/registro.csv
+          git commit -m "Programador: registro de Historias ($(TZ=America/Santiago date '+%Y-%m-%d %H:%M'))"
+          for intento in 1 2 3; do
+            if git push origin "HEAD:$RAMA"; then exit 0; fi
+            git pull --rebase origin "$RAMA" || git rebase --abort || true
+            sleep 5
+          done
+          echo "::error::No pude subir programador/registro.csv. Súbelo a mano antes de la próxima corrida para no publicar dos veces."
+          exit 1
