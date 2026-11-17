@@ -624,9 +624,9 @@ def comprobar_en_instagram(graph: Graph, ig_id: str, media_id: str) -> None:
         log("    En Instagram: " + (", ".join(f"{c} {datos[c]}" for c in campos if datos.get(c)) or "sin datos"))
         vigentes = {str(x.get("id")) for x in (graph.get(f"{ig_id}/stories", {"fields": "id"}).get("data") or [])}
         if media_id in vigentes:
-            log(f"    Comprobado: está entre las {len(vigentes)} Historias vigentes de la cuenta.")
+            log(f"    Comprobado: está entre las Historias vigentes de la cuenta ({len(vigentes)} en total).")
         else:
-            log(f"    AVISO: no aparece entre las {len(vigentes)} Historias vigentes de la cuenta (GET /stories).")
+            log(f"    AVISO: no aparece entre las Historias vigentes de la cuenta ({len(vigentes)} en total, GET /stories).")
     except Exception as e:  # nunca convierte una publicación hecha en error
         log(f"    AVISO: no pude consultarla en Instagram ({type(e).__name__}: {e}). Ya quedó anotada como publicada.")
 

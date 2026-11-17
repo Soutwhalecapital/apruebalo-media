@@ -2,7 +2,9 @@
 
 Publica solo las Historias de Instagram de Apruébalo con la API de Meta, desde GitHub Actions, sin Metricool.
 
-**Estado actual: en pausa.** No existe `programador/activo.txt`, así que el flujo programado corre pero no publica nada. Se activa después de la prueba real contigo.
+**Estado actual: activo desde el 17-11-2026, publica desde el 13-12-2026.** Existe `programador/activo.txt` y `desde.txt` está en 2026-12-13, así que el flujo programado corre pero no publica nada hasta la Historia del 13-12 a las 18:00 (hasta el 12-12 las publica Metricool).
+
+Prueba real (Pedido 9, C3) hecha el 17-11-2026: H-2026-11-13 salió con `--id H-2026-11-13 --ahora` (corrida 44098430588 de GitHub Actions, media_id 17910179511598595, 5341 min de atraso respecto de su hora programada del 13-11 a las 18:00). Tras publicarla, la API la devolvió como `STORY` y entre las Historias vigentes de @apruebalo.cl.
 
 ## Qué hace
 
@@ -31,7 +33,7 @@ Cada 30 minutos, entre las 12:00 y las 21:59 hora de Chile, el flujo `.github/wo
 
 `cron: '7,37 12-21 * * *'` con `timezone: 'America/Santiago'`: a las 12:07, 12:37, 13:07… hasta las 21:37, hora de Chile. GitHub acepta `timezone` con nombres IANA y sigue solo el cambio de horario de Chile (UTC-3 en verano, UTC-4 en invierno). Se evita el minuto 0 porque GitHub atrasa las ejecuciones al empezar cada hora.
 
-GitHub puede atrasar una corrida programada unos minutos. No importa: la ventana es de 6 horas.
+GitHub puede atrasar una corrida programada, y en este repositorio lo hace mucho: entre el 09 y el 16-11-2026 corrió el cron solo 2 o 3 veces al día (de 20 previstas), con atrasos de hasta unas 7 horas. Aun así, todos esos días hubo al menos una corrida entre las 18:00 y las 24:00, a las 18:16 la más temprana y a las 21:19 la más tardía. O sea, con la ventana de 6 horas la Historia de las 18:00 habría salido con entre 16 y 199 minutos de atraso, y los días con una sola corrida en la ventana no hay tiempo para el reintento. Revisa `atraso_min` en el registro.
 
 ## La regla de la tanda más nueva
 

@@ -620,7 +620,7 @@ class PruebasPublicarYa(unittest.TestCase):
         )
         self.assertEqual(f["atraso_min"], str(4 * 24 * 60 - 160))  # 13-11 18:00 -> 17-11 15:20
         self.assertEqual(f["error"], p.NOTA_MANUAL)
-        self.assertIn("Comprobado: está entre las 2 Historias vigentes", salida)
+        self.assertIn("Comprobado: está entre las Historias vigentes de la cuenta (2 en total)", salida)
         # No toca desde.txt ni crea activo.txt, y el token no sale.
         self.assertEqual((self.repo.raiz / "programador" / "desde.txt").read_bytes(), self.desde_antes)
         self.assertFalse((self.repo.raiz / "programador" / "activo.txt").exists())

@@ -1,0 +1,1 @@
+2026-11-17: activado tras la prueba real con H-2026-11-13 (Pedido 13). Borra este archivo para pausar el programador.
