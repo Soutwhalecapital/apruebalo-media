@@ -106,6 +106,12 @@ class MetaFalsa:
                 raise TimeoutError("timed out")
             if self.publicar == "sin_respuesta_no_publicada":
                 raise TimeoutError("timed out")
+        if metodo == "GET" and ruta == "MEDIA99":
+            return self._json({"id": "MEDIA99", "media_type": "IMAGE", "media_product_type": "STORY",
+                               "timestamp": "2026-11-17T18:20:00+0000",
+                               "permalink": "https://www.instagram.com/stories/apruebalo.cl/MEDIA99/"})
+        if metodo == "GET" and ruta == f"{IG_ID}/stories":
+            return self._json({"data": [{"id": "OTRA"}] + ([{"id": "MEDIA99"}] if self.publicado else [])})
         if metodo == "GET" and ruta == IG_ID:
             return self._json({"username": "apruebalo.cl", "id": IG_ID})
         if metodo == "GET" and ruta == f"{IG_ID}/content_publishing_limit":
@@ -124,7 +130,8 @@ class MetaFalsa:
 
 
 class RepoFalso:
-    """Repositorio temporal con una Historia el 2026-11-16 (tanda-3) y otra el 17 (tanda-3)."""
+    """Repositorio temporal con desde.txt en 2026-11-16 y, en tanda-3, una Historia el
+    13-11 (antes de desde.txt, para --id), otra el 16 y otra el 17 (pisa a la de tanda-1)."""
 
     def __init__(self, activo=False, registro=None):
         self.dir = tempfile.TemporaryDirectory()
@@ -136,11 +143,15 @@ class RepoFalso:
         if activo:
             (self.raiz / "programador" / "activo.txt").write_text("", encoding="utf-8")
         escribir_csv(self.raiz, 1, [fila("2026-11-12", 1), fila("2026-11-17", 1)], crlf=True)
-        escribir_csv(self.raiz, 3, [fila("2026-11-16", 3), fila("2026-11-17", 3)])
+        escribir_csv(self.raiz, 3, [fila("2026-11-13", 3), fila("2026-11-16", 3), fila("2026-11-17", 3)])
 
     @property
     def registro(self):
         return (self.raiz / "programador" / "registro.csv").read_text(encoding="utf-8")
+
+    @property
+    def filas(self):
+        return p.leer_registro(self.raiz / "programador" / "registro.csv")
 
     def correr(self, *argv, token=TOKEN_FALSO, meta=None, ahora=chile(2026, 11, 16, 18, 7)):
         meta = meta or MetaFalsa()
@@ -336,7 +347,16 @@ class PruebasRegistro(unittest.TestCase):
     def test_registro_vacio_o_inexistente(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(p.leer_registro(Path(d) / "no.csv"), [])
-        self.assertEqual(p.leer_registro(REPO_REAL / "programador" / "registro.csv"), [])
+            ruta = Path(d) / "registro.csv"
+            ruta.write_text(";".join(p.COLUMNAS_REGISTRO) + "\n", encoding="utf-8")
+            self.assertEqual(p.leer_registro(ruta), [])
+
+    def test_registro_y_desde_reales_se_leen(self):
+        # El registro real crece con cada corrida: solo se comprueba que se lea y que sus
+        # estados sean conocidos (un estado desconocido bloquea la Historia).
+        for f in p.leer_registro(REPO_REAL / "programador" / "registro.csv"):
+            self.assertIn(f["estado"], (p.ESTADO_PUBLICADA, p.ESTADO_ERROR, p.ESTADO_INCIERTO), f)
+        self.assertIsInstance(p.leer_desde(REPO_REAL / "programador" / "desde.txt"), date)
 
     def test_reglas_de_reintento(self):
         def motivo(*estados):
@@ -546,6 +566,162 @@ class PruebasCorrida(unittest.TestCase):
         self.assertEqual(codigo, 1)
         self.assertIn("ERROR de configuración", salida)
         self.assertNotIn("Traceback", salida)
+
+    def test_la_comprobacion_en_instagram_que_falla_no_cambia_nada(self):
+        repo = self.nuevo(activo=True)
+
+        class MetaSinConsulta(MetaFalsa):
+            def __call__(self, peticion, timeout=None):
+                if peticion.get_method() == "GET" and peticion.full_url.split("?")[0].endswith("/MEDIA99"):
+                    raise error_http(peticion.full_url, 500, {"error": {"message": "falla", "code": 1}})
+                return super().__call__(peticion, timeout)
+
+        codigo, salida, _, _ = repo.correr("--programado", meta=MetaSinConsulta())
+        self.assertEqual(codigo, 0, salida)
+        self.assertIn("AVISO: no pude consultarla", salida)
+        (f,) = repo.filas
+        self.assertEqual((f["estado"], f["media_id"]), ("publicada", "MEDIA99"))
+
+
+# ------------------------------------------------------------------ --id ID --ahora
+
+
+class PruebasPublicarYa(unittest.TestCase):
+    AHORA = chile(2026, 11, 17, 15, 20)
+
+    def setUp(self):
+        self.repo = RepoFalso(activo=False)
+        self.desde_antes = (self.repo.raiz / "programador" / "desde.txt").read_bytes()
+
+    def tearDown(self):
+        self.repo.cerrar()
+
+    def correr(self, *argv, **kw):
+        kw.setdefault("ahora", self.AHORA)
+        return self.repo.correr(*argv, **kw)
+
+    def error_de_argumentos(self, *argv):
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()) as err:
+            p._argumentos(list(argv))
+        self.assertEqual(cm.exception.code, 2)
+        return err.getvalue()
+
+    def test_publica_ya_aunque_no_le_toque_ni_exista_activo(self):
+        # H-2026-11-13 es de antes de desde.txt (16-11), está fuera de la ventana y no hay activo.txt.
+        codigo, salida, meta, esperas = self.correr("--id", "H-2026-11-13", "--ahora")
+        self.assertEqual(codigo, 0, salida)
+        crear = [x for x in meta.peticiones if x[0] == "POST" and x[1].endswith("/media")]
+        self.assertEqual(len(crear), 1)
+        self.assertEqual(crear[0][3]["image_url"], [f"{URL_BASE}/tanda-3/historias/H-2026-11-13.jpg"])
+        (f,) = self.repo.filas
+        self.assertEqual(
+            (f["ID"], f["estado"], f["media_id"], f["programada"], f["publicada"]),
+            ("H-2026-11-13", "publicada", "MEDIA99", "2026-11-13T18:00-03:00", "2026-11-17T15:20-03:00"),
+        )
+        self.assertEqual(f["atraso_min"], str(4 * 24 * 60 - 160))  # 13-11 18:00 -> 17-11 15:20
+        self.assertEqual(f["error"], p.NOTA_MANUAL)
+        self.assertIn("Comprobado: está entre las 2 Historias vigentes", salida)
+        # No toca desde.txt ni crea activo.txt, y el token no sale.
+        self.assertEqual((self.repo.raiz / "programador" / "desde.txt").read_bytes(), self.desde_antes)
+        self.assertFalse((self.repo.raiz / "programador" / "activo.txt").exists())
+        self.assertNotIn(TOKEN_FALSO, salida + self.repo.registro)
+
+    def test_no_la_publica_dos_veces(self):
+        self.assertEqual(self.correr("--id", "H-2026-11-13", "--ahora")[0], 0)
+        antes = self.repo.registro
+        codigo, salida, meta, _ = self.correr("--id", "H-2026-11-13", "--ahora")
+        self.assertEqual(codigo, 1)
+        self.assertEqual(meta.peticiones, [])  # ni Meta ni GitHub
+        self.assertIn("ya publicada", salida)
+        self.assertEqual(self.repo.registro, antes)
+
+    def test_publicada_a_mano_no_la_repite_el_programado(self):
+        self.assertEqual(self.correr("--id", "H-2026-11-16", "--ahora", ahora=chile(2026, 11, 16, 10, 0))[0], 0)
+        (self.repo.raiz / "programador" / "activo.txt").write_text("", encoding="utf-8")
+        codigo, salida, meta, _ = self.correr("--programado", ahora=chile(2026, 11, 16, 18, 7))
+        self.assertEqual((codigo, meta.peticiones), (0, []))
+        self.assertIn("ya publicada", salida)
+        self.assertEqual(self.repo.filas[0]["atraso_min"], "-480")  # salió 8 h antes de su hora
+
+    def test_incierta_o_desconocida_no_se_publica(self):
+        for estado in ("incierto", "rara"):
+            with self.subTest(estado=estado):
+                self.repo.cerrar()
+                self.repo = RepoFalso(registro=f"H-2026-11-13;2026-11-13T18:00-03:00;;;;{estado};x\n")
+                antes = self.repo.registro
+                codigo, salida, meta, _ = self.correr("--id", "H-2026-11-13", "--ahora")
+                self.assertEqual((codigo, meta.peticiones), (1, []))
+                self.assertIn("No se publica H-2026-11-13", salida)
+                self.assertEqual(self.repo.registro, antes)
+
+    def test_los_errores_previos_no_bloquean(self):
+        self.repo.cerrar()
+        error = "H-2026-11-13;2026-11-13T18:00-03:00;;;;error;intento {}: red\n"
+        self.repo = RepoFalso(registro=error.format(1) + error.format(2))
+        codigo, salida, _, _ = self.correr("--id", "H-2026-11-13", "--ahora")
+        self.assertEqual(codigo, 0, salida)
+        self.assertEqual([f["estado"] for f in self.repo.filas], ["error", "error", "publicada"])
+
+    def test_error_queda_en_el_registro(self):
+        codigo, salida, _, _ = self.correr("--id", "H-2026-11-13", "--ahora", meta=MetaFalsa(estados=("ERROR",)))
+        self.assertEqual(codigo, 1)
+        (f,) = self.repo.filas
+        self.assertEqual(f["estado"], "error")
+        self.assertTrue(f["error"].startswith(p.NOTA_MANUAL + " a las 2026-11-17T15:20-03:00: "), f["error"])
+        self.assertIn("vuelve a lanzar --id", salida)
+
+    def test_sin_token_anota_error(self):
+        codigo, _, meta, _ = self.correr("--id", "H-2026-11-13", "--ahora", token=None)
+        self.assertEqual((codigo, meta.peticiones), (1, []))
+        (f,) = self.repo.filas
+        self.assertEqual(f["estado"], "error")
+        self.assertIn("META_TOKEN", f["error"])
+
+    def test_usa_la_tanda_mas_nueva(self):
+        # H-2026-11-17 está en tanda-1 y en tanda-3 con imágenes distintas: manda tanda-3.
+        codigo, salida, meta, _ = self.correr("--id", "H-2026-11-17", "--ahora")
+        self.assertEqual(codigo, 0, salida)
+        crear = [x for x in meta.peticiones if x[0] == "POST" and x[1].endswith("/media")][0]
+        self.assertEqual(crear[3]["image_url"], [f"{URL_BASE}/tanda-3/historias/H-2026-11-17.jpg"])
+
+    def test_id_que_pierde_en_su_fecha_o_que_no_existe(self):
+        escribir_csv(self.repo.raiz, 2, ["H-vieja;2026-11-17;Historia;a.png;https://x/a.png"])
+        for id_, texto in (("H-vieja", "manda tanda-3 con H-2026-11-17"), ("H-2099-01-01", "No encontré")):
+            with self.subTest(id_=id_):
+                codigo, salida, meta, _ = self.correr("--id", id_, "--ahora")
+                self.assertEqual((codigo, meta.peticiones), (1, []))
+                self.assertIn(texto, salida)
+                self.assertNotIn("Traceback", salida)
+                self.assertEqual(self.repo.filas, [])
+
+    def test_simular_con_id_no_publica_ni_anota(self):
+        codigo, salida, meta, _ = self.correr("--simular", "--id", "H-2026-11-13", "--ahora")
+        self.assertEqual(codigo, 0, salida)
+        self.assertEqual({m for m, _, _, _ in meta.graph()}, {"GET"})
+        self.assertIn("tanda-3/historias/H-2026-11-13.jpg", salida)
+        self.assertEqual(self.repo.filas, [])
+
+    def test_argumentos(self):
+        args = p._argumentos(["--ahora", "--id", "H-2026-12-13"])  # el orden da lo mismo
+        self.assertEqual((args.id, args.ahora), ("H-2026-12-13", p.AHORA_YA))
+        self.assertEqual(p._argumentos(["--id", " H-1 ", "--ahora"]).id, "H-1")
+        args = p._argumentos(["--simular", "--ahora", "2026-12-13T18:30"])
+        self.assertEqual((args.id, args.ahora), (None, "2026-12-13T18:30"))
+        self.assertIn("--id ID --ahora", self.error_de_argumentos("--id", "H-1"))
+        self.assertIn("sin fecha", self.error_de_argumentos("--id", "H-1", "--ahora", "2026-12-13T18:30"))
+        self.assertIn("solo va con --id", self.error_de_argumentos("--ahora"))
+        self.assertIn("solo va con --id", self.error_de_argumentos("--simular", "--ahora"))
+        self.assertIn("--programado", self.error_de_argumentos("--programado", "--id", "H-1", "--ahora"))
+        for malo in ("", "H-1;ls", "$(id)", "H 1", "../x", "-H", "Á" * 3, "H" * 65):
+            with self.subTest(malo=malo):
+                self.error_de_argumentos("--id=" + malo, "--ahora")
+
+    def test_buscar_en_los_csv_reales(self):
+        h = p.buscar_historia(REPO_REAL, "H-2026-11-13", TZ)
+        self.assertEqual((h.tanda, h.programada), (3, chile(2026, 11, 13, 18, 0)))
+        self.assertTrue(h.url_jpg.endswith("/tanda-3/historias/H-2026-11-13.jpg"))
+        self.assertTrue((REPO_REAL / "tanda-3" / "historias" / "H-2026-11-13.jpg").is_file())
+        self.assertEqual(p.buscar_historia(REPO_REAL, "H-2026-11-17", TZ).tanda, 3)
 
 
 if __name__ == "__main__":

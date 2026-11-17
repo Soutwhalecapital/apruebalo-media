@@ -13,7 +13,7 @@ Cada 30 minutos, entre las 12:00 y las 21:59 hora de Chile, el flujo `.github/wo
 3. Toma las que tengan su hora de publicación dentro de las **últimas 6 horas** y que el registro no bloquee. La hora es la de la columna `hora` del CSV si existe (HH:MM, hora de Chile); si no, las **18:00**. En la práctica, la Historia del día sale a las 18:07.
 4. Usa la versión **JPEG** de cada imagen (la misma URL con `.jpg`), porque la API de Instagram solo acepta JPEG. Antes de crear nada revisa que el JPEG responda 200.
 5. Con la Graph API (versión fijada en `GRAPH_VERSION`, hoy v27.0) obtiene la cuenta de Instagram de la página 106944895827994, crea el contenedor `STORIES`, consulta `status_code` cada 30 segundos hasta `FINISHED` (máximo 5 minutos) y publica con `media_publish`.
-6. Anota cada intento en `programador/registro.csv` y el flujo hace commit y push del registro.
+6. Anota cada intento en `programador/registro.csv` y el flujo hace commit y push del registro. Después de anotar una publicada, la consulta en Instagram (`media_product_type`, `timestamp`, `permalink`) y revisa que esté entre las Historias vigentes de la cuenta (`/stories`). Esa comprobación solo informa en el log: si falla, deja un AVISO y no cambia el registro.
 7. Si algo falla, deja el error en el registro y termina con error. Así GitHub te manda el correo de falla.
 
 ## Archivos
@@ -21,9 +21,9 @@ Cada 30 minutos, entre las 12:00 y las 21:59 hora de Chile, el flujo `.github/wo
 | Archivo | Para qué |
 | --- | --- |
 | `programador/publicar.py` | El script. Solo usa la biblioteca estándar de Python. |
-| `programador/desde.txt` | Fecha desde la que publica (AAAA-MM-DD). Hoy: 2026-11-13, la fecha de la prueba real con H-2026-11-13 (decidido el 09-11-2026); si sale bien, sigue con el 14 y el 15. |
+| `programador/desde.txt` | Fecha desde la que publica (AAAA-MM-DD). Hoy: **2026-12-13**. Metricool ya tiene programada una Historia diaria hasta el 12-12; desde el 13-12 las Historias las publica este programador, así ninguna sale dos veces (decidido el 17-11-2026, Pedido 13). |
 | `programador/activo.txt` | Interruptor. Si existe, el flujo programado publica; si no, está en pausa. El contenido da lo mismo. |
-| `programador/registro.csv` | Un renglón por intento: `ID;programada;publicada;atraso_min;media_id;estado;error`. |
+| `programador/registro.csv` | Un renglón por intento: `ID;programada;publicada;atraso_min;media_id;estado;error`. La última columna lleva el error o una nota (por ejemplo `manual (--id --ahora)`). |
 | `programador/test_publicar.py` | Pruebas. |
 | `.github/workflows/programador.yml` | El flujo de GitHub Actions. |
 
@@ -37,7 +37,7 @@ GitHub puede atrasar una corrida programada unos minutos. No importa: la ventana
 
 Los CSV se pisan: por ejemplo, tanda-1 y tanda-3 tienen los dos un H-2026-11-17, y tanda-2 y tanda-3 un H-2026-12-02, con imágenes distintas. La regla es: **para cada fecha se usa solo la fila del CSV de la tanda con el número más alto que tenga esa fecha.** Así sale una sola Historia por día.
 
-Con los CSV de hoy, desde el 13-11 quedan 37 Historias: del 13-11 al 13-12 todas salen de tanda-3 (como dice el informe del Pedido 8), y el 16, 19, 22, 26, 28 y 30 de diciembre, de tanda-2.
+Con los CSV de hoy (17-11-2026), desde el 13-12 quedan 7 Historias, todas a las 18:00: la del 13-12 sale de tanda-3 (usa la imagen `tanda-3/historias/H-2026-11-14.jpg`) y las del 16, 19, 22, 26, 28 y 30 de diciembre, de tanda-2. Los demás días de diciembre no hay Historia programada en los CSV.
 
 Si agregas una `tanda-4/historias-programables.csv`, entra sola y manda sobre las anteriores en las fechas que tenga. Las filas cuyo `tipo` no sea Historia se ignoran. Si la tanda ganadora trae dos filas para la misma fecha, el script se detiene con un error claro en vez de adivinar.
 
@@ -85,12 +85,28 @@ Mientras exista `programador/activo.txt`, **la tarea de los viernes no programa 
 
   ```
   python programador/publicar.py --simular
-  python programador/publicar.py --simular --ahora 2026-11-16T18:30
+  python programador/publicar.py --simular --ahora 2026-12-13T18:30
   ```
 
-  `--ahora` fija la hora (sin zona, se entiende hora de Chile) y solo se acepta con `--simular`. En Windows, si el script dice que no encuentra la zona horaria, instala `pip install tzdata`.
+  `--ahora` **con fecha** fija la hora (sin zona, se entiende hora de Chile) y solo se acepta con `--simular`. En Windows, si el script dice que no encuentra la zona horaria, instala `pip install tzdata`.
 
-Si desmarcas «Simular» en Run workflow, la corrida es **real**: publica lo que esté en la ventana aunque no exista `activo.txt`. Sirve para la prueba real; no la uses sin querer publicar.
+Si desmarcas «Simular» en Run workflow (y dejas vacío «ID»), la corrida es **real**: publica lo que esté en la ventana aunque no exista `activo.txt`. No la uses sin querer publicar.
+
+## Publicar ya una Historia (`--id ID --ahora`)
+
+Publica **de inmediato** una Historia elegida por su ID, aunque no le toque por fecha ni por `desde.txt` y aunque no exista `activo.txt`. Sirve para la prueba real, para recuperar una Historia que no salió o para adelantar una.
+
+- **En GitHub**: Actions > Programador de Historias > Run workflow, y escribe el ID en «ID» (por ejemplo `H-2026-12-13`). Con ID, la corrida es **real** y no mira la casilla «Simular». O bien `gh workflow run programador.yml -f id=H-2026-12-13`. El flujo recibe el ID por variable de entorno y acepta solo letras, números, guion y guion bajo (hasta 64); si no, se detiene sin llamar al script.
+- **En el PC**: `python programador/publicar.py --id H-2026-12-13 --ahora` (necesita `META_TOKEN` en el entorno; sin token deja un error en el registro local). Para probarlo sin publicar: `python programador/publicar.py --simular --id H-2026-12-13 --ahora`.
+
+`--ahora` tiene dos usos que no se mezclan: **con fecha**, solo junto a `--simular` (fija la hora de la simulación); **sin fecha**, solo junto a `--id` (publicar ya). `--id` sin `--ahora`, `--id` con `--ahora FECHA`, `--ahora` sin fecha y sin `--id`, o `--id` con `--programado` terminan con error antes de hacer nada.
+
+Cómo elige y anota:
+
+1. Busca el ID exacto en todos los `tanda-N/historias-programables.csv` y aplica la regla de la tanda más nueva en su fecha. Si ese ID está solo en una tanda que pierde en su fecha (ese día manda otra Historia), se detiene y dice cuál manda.
+2. Respeta el registro: si ese ID ya figura **publicada**, **incierto** o con un estado desconocido, no lo publica (termina con error sin tocar el registro). Los **errores** previos no bloquean: no salió nada y lo pide una persona.
+3. Publica igual que el programado (JPEG, contenedor `STORIES`, `FINISHED`, `media_publish`) y anota el renglón con estado, `media_id` y `atraso_min` **respecto de su hora programada** (por ejemplo, H-2026-11-13 publicada el 17-11 tiene unos 5.700 minutos de atraso; una Historia adelantada tiene atraso negativo). La nota `manual (--id --ahora)` queda en la última columna.
+4. **No toca `desde.txt`** ni `activo.txt`. Como queda «publicada» en el registro, el programado no la repite cuando llegue su fecha.
 
 ## El acceso de Meta
 
@@ -113,4 +129,4 @@ Desde la raíz del repositorio:
 python -m unittest discover -s programador -v
 ```
 
-Cubren la ventana de 6 horas, el horario de verano e invierno de Chile y los dos cambios de hora, `desde.txt`, la columna `hora`, la regla de la tanda más nueva (también con los CSV reales del repositorio), la lectura y escritura del registro, los reintentos, la pausa sin `activo.txt` y que el token no aparezca en la salida ni en el registro. No usan la red ni el token: Meta y GitHub se reemplazan por respuestas falsas.
+Cubren la ventana de 6 horas, el horario de verano e invierno de Chile y los dos cambios de hora, `desde.txt`, la columna `hora`, la regla de la tanda más nueva (también con los CSV reales del repositorio), la lectura y escritura del registro, los reintentos, la pausa sin `activo.txt`, que el token no aparezca en la salida ni en el registro, y `--id ID --ahora`: publica fuera de fecha y sin `activo.txt`, no toca `desde.txt`, anota el atraso, no repite una publicada o incierta, usa la tanda más nueva, rechaza IDs inválidos o que pierden en su fecha y que la comprobación posterior en Instagram nunca cambie una publicada. No usan la red ni el token: Meta y GitHub se reemplazan por respuestas falsas.

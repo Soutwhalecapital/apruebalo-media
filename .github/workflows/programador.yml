@@ -15,6 +15,11 @@ on:
         description: 'Simular: lista y valida el acceso, pero no crea ni publica nada'
         type: boolean
         default: true
+      id:
+        description: 'Publicar YA esta Historia (p. ej. H-2026-12-13). Corrida REAL: no mira Simular, la fecha, desde.txt ni activo.txt. Vacío = no se usa.'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -40,10 +45,25 @@ jobs:
           META_TOKEN: ${{ secrets.META_TOKEN }}
           EVENTO: ${{ github.event_name }}
           SIMULAR: ${{ inputs.simular }}
+          # El ID llega por variable de entorno (nunca dentro del script) y se valida
+          # antes de usarlo, para que no se pueda inyectar nada.
+          ID_HISTORIA: ${{ inputs.id }}
         run: |
           opciones=()
-          if [ "$EVENTO" = "schedule" ]; then opciones+=(--programado); fi
-          if [ "$EVENTO" = "workflow_dispatch" ] && [ "$SIMULAR" = "true" ]; then opciones+=(--simular); fi
+          id_historia="$ID_HISTORIA"
+          id_historia="${id_historia#"${id_historia%%[![:space:]]*}"}"  # quita espacios al inicio
+          id_historia="${id_historia%"${id_historia##*[![:space:]]}"}"  # y al final
+          if [ "$EVENTO" = "schedule" ]; then
+            opciones+=(--programado)
+          elif [ "$EVENTO" = "workflow_dispatch" ] && [ -n "$id_historia" ]; then
+            if [[ ! "$id_historia" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]]; then
+              echo "::error::El ID no es válido: usa solo letras, números, guion y guion bajo (p. ej. H-2026-12-13)."
+              exit 1
+            fi
+            opciones+=(--id "$id_historia" --ahora)
+          elif [ "$EVENTO" = "workflow_dispatch" ] && [ "$SIMULAR" = "true" ]; then
+            opciones+=(--simular)
+          fi
           echo "Evento: $EVENTO. Opciones: ${opciones[*]:-(ninguna: corrida manual real)}"
           python3 programador/publicar.py "${opciones[@]}"
 

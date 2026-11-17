@@ -10,8 +10,14 @@ Modos:
   --simular     hace todo menos crear y publicar: lista lo que publicaría, revisa los
                 JPEG y, si hay token, valida el acceso y el id de Instagram. No toca
                 el registro. Sin token, falla con código 1 después de listar.
-  --ahora       fija la hora (solo con --simular). Sin zona, se entiende hora de Chile.
-                Ejemplo: --ahora 2026-11-16T18:30
+  --ahora FECHA fija la hora (solo con --simular). Sin zona, se entiende hora de Chile.
+                Ejemplo: --simular --ahora 2026-11-16T18:30
+  --id ID --ahora
+                publica YA esa Historia (--ahora va sin fecha). La busca por su ID exacto
+                en los historias-programables.csv con la regla de la tanda más nueva, sin
+                mirar la ventana, desde.txt ni activo.txt. La anota en el registro y no
+                toca desde.txt. Si el registro la tiene publicada, incierta o con un
+                estado desconocido, no la publica. Con --simular, solo la prueba.
 
 El acceso de Meta se lee solo de la variable de entorno META_TOKEN. Viaja solo en la
 cabecera Authorization de las peticiones a graph.facebook.com y se borra de todo texto
@@ -54,6 +60,10 @@ TIMEOUT_HTTP_S = 30
 
 ARCHIVO_CSV = "historias-programables.csv"
 PATRON_TANDA = re.compile(r"^tanda-(\d+)$")
+# Formato aceptado para --id (el flujo de GitHub valida el mismo antes de llamar al script).
+PATRON_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+AHORA_YA = "__ya__"  # valor de --ahora cuando va sin fecha (publicar ya, con --id)
+NOTA_MANUAL = "manual (--id --ahora)"
 COLUMNAS_REGISTRO = ["ID", "programada", "publicada", "atraso_min", "media_id", "estado", "error"]
 ESTADO_PUBLICADA = "publicada"
 ESTADO_ERROR = "error"
@@ -302,6 +312,36 @@ def cargar_historias(repo: Path, desde: date, tz) -> list[Historia]:
     return tanda_mas_nueva([h for h in todas if h.fecha >= desde])
 
 
+def buscar_historia(repo: Path, id_: str, tz) -> Historia:
+    """La Historia con ese ID exacto, según la regla de la tanda más nueva.
+
+    No mira desde.txt ni la fecha. Solo aplica la regla a las fechas donde aparece el
+    ID, para que un problema en otra fecha no impida publicarla. Si el ID solo está en
+    una tanda que pierde en su fecha, es un error: ese día manda otra Historia.
+    """
+    tandas = listar_tandas(repo)
+    if not tandas:
+        raise ErrorConfig(f"No encontré ningún tanda-N/{ARCHIVO_CSV} en {repo}")
+    todas: list[Historia] = []
+    for numero, ruta in tandas:
+        todas.extend(leer_csv_tanda(ruta, numero, tz))
+    con_id = [h for h in todas if h.id == id_]
+    if not con_id:
+        raise ErrorConfig(f"No encontré la Historia {id_} en ningún tanda-N/{ARCHIVO_CSV}")
+    fechas = {h.fecha for h in con_id}
+    elegidas = tanda_mas_nueva([h for h in todas if h.fecha in fechas])
+    ganadoras = [h for h in elegidas if h.id == id_]
+    if not ganadoras:
+        detalle = "; ".join(
+            f"{h.origen} ({h.fecha}): ese día manda tanda-{g.tanda} con {g.id}"
+            for h in con_id
+            for g in elegidas
+            if g.fecha == h.fecha
+        )
+        raise ErrorConfig(f"{id_} no es la Historia que manda en su fecha (regla de la tanda más nueva): {detalle}")
+    return ganadoras[0]  # tanda_mas_nueva ya garantiza que el ID no se repite
+
+
 def leer_desde(ruta: Path) -> date:
     if not ruta.is_file():
         raise ErrorConfig(f"Falta {ruta.name}: debe tener una fecha AAAA-MM-DD")
@@ -372,6 +412,14 @@ def motivo_bloqueo(est: EstadoRegistro | None) -> str | None:
     if est.errores >= MAX_INTENTOS:
         return f"{est.errores} intentos fallidos: no se reintenta"
     return None
+
+
+def motivo_bloqueo_manual(est: EstadoRegistro | None) -> str | None:
+    """Como motivo_bloqueo, pero para --id --ahora: los errores previos no bloquean
+    (no salió nada y la pide una persona); publicada, incierta o desconocida, sí."""
+    if est is None:
+        return None
+    return motivo_bloqueo(EstadoRegistro(est.publicada, est.incierta, 0, est.otros))
 
 
 def agregar_registro(ruta: Path, fila: dict[str, str]) -> None:
@@ -564,6 +612,25 @@ def _confirmar_por_contenedor(graph: Graph, contenedor_id: str, causa: str) -> s
     )
 
 
+def comprobar_en_instagram(graph: Graph, ig_id: str, media_id: str) -> None:
+    """Tras publicar, consulta la Historia en Instagram y si está entre las Historias
+    vigentes de la cuenta. Solo informa: un fallo aquí no cambia el registro."""
+    if not media_id:
+        log("    Sin media_id: no la puedo consultar en Instagram.")
+        return
+    try:
+        datos = graph.get(media_id, {"fields": "id,media_type,media_product_type,timestamp,permalink"})
+        campos = ("media_product_type", "media_type", "timestamp", "permalink")
+        log("    En Instagram: " + (", ".join(f"{c} {datos[c]}" for c in campos if datos.get(c)) or "sin datos"))
+        vigentes = {str(x.get("id")) for x in (graph.get(f"{ig_id}/stories", {"fields": "id"}).get("data") or [])}
+        if media_id in vigentes:
+            log(f"    Comprobado: está entre las {len(vigentes)} Historias vigentes de la cuenta.")
+        else:
+            log(f"    AVISO: no aparece entre las {len(vigentes)} Historias vigentes de la cuenta (GET /stories).")
+    except Exception as e:  # nunca convierte una publicación hecha en error
+        log(f"    AVISO: no pude consultarla en Instagram ({type(e).__name__}: {e}). Ya quedó anotada como publicada.")
+
+
 # ---------------------------------------------------------------- corrida
 
 
@@ -624,7 +691,8 @@ def _simular(pendientes, token, abrir, activo) -> int:
     return 1 if fallas else 0
 
 
-def _publicar(pendientes, resumen, token, abrir, reloj, dormir, ruta_registro, tz) -> int:
+def _publicar(pendientes, resumen, token, abrir, reloj, dormir, ruta_registro, tz, manual=False) -> int:
+    """Publica y anota cada Historia. manual=True es --id --ahora: no cuenta intentos."""
     fallas = 0
     graph = Graph(token, abrir) if token else None
     ig_id, error_ig = None, None
@@ -638,9 +706,13 @@ def _publicar(pendientes, resumen, token, abrir, reloj, dormir, ruta_registro, t
     for h in pendientes:
         est = resumen.get(h.id)
         numero = (est.errores if est else 0) + 1
-        log(f"Publicando {h.id} (intento {numero} de {MAX_INTENTOS})")
+        if manual:
+            log(f"Publicando {h.id} ya, a mano (--id --ahora)")
+        else:
+            log(f"Publicando {h.id} (intento {numero} de {MAX_INTENTOS})")
         fila = {"ID": h.id, "programada": fmt_registro(h.programada)}
         intento = Intento()
+        media_id = None
         try:
             if not token:
                 raise ErrorPublicacion("Falta el secreto META_TOKEN (Settings > Secrets and variables > Actions)")
@@ -650,10 +722,14 @@ def _publicar(pendientes, resumen, token, abrir, reloj, dormir, ruta_registro, t
             momento = reloj().astimezone(tz)
             atraso = round((momento.astimezone(timezone.utc) - h.programada.astimezone(timezone.utc)).total_seconds() / 60)
             fila.update(publicada=fmt_registro(momento), atraso_min=str(atraso), media_id=media_id, estado=ESTADO_PUBLICADA)
+            notas = [NOTA_MANUAL] if manual else []
             if not media_id:
-                fila["error"] = "media_publish no respondió claro; confirmada por status_code=PUBLISHED; media_id desconocido"
+                notas.append("media_publish no respondió claro; confirmada por status_code=PUBLISHED; media_id desconocido")
+            if notas:
+                fila["error"] = "; ".join(notas)
             log(f"  OK: {h.id} publicada (media_id {media_id or 'desconocido'}, {atraso} min de atraso)")
         except Exception as e:
+            media_id = None
             incierto = isinstance(e, ErrorPublicacion) and e.incierto
             if not isinstance(e, (ErrorPublicacion, ErrorGraph)):
                 # Falla inesperada: si ya se llamó a media_publish, puede que sí se haya publicado.
@@ -662,30 +738,81 @@ def _publicar(pendientes, resumen, token, abrir, reloj, dormir, ruta_registro, t
                 e = f"{type(e).__name__}: {e}"
             fallas += 1
             momento = reloj().astimezone(tz)
+            cual = NOTA_MANUAL if manual else f"intento {numero}"
             fila.update(
                 estado=ESTADO_INCIERTO if incierto else ESTADO_ERROR,
-                error=f"intento {numero} a las {fmt_registro(momento)}: {e}",
+                error=f"{cual} a las {fmt_registro(momento)}: {e}",
             )
             log(f"  ERROR en {h.id}: {e}")
             if incierto:
                 log("  No se reintenta solo, para no publicar dos veces. Revisa Instagram (ver README).")
+            elif manual:
+                log("  No salió nada. Corrige la causa y vuelve a lanzar --id si quieres reintentarlo.")
             elif numero >= MAX_INTENTOS:
                 log("  Era el último intento: no se vuelve a intentar.")
             else:
                 log("  Se reintenta una sola vez en la próxima corrida, si sigue dentro de la ventana de 6 h.")
         agregar_registro(ruta_registro, fila)
+        if media_id is not None:  # publicada: la busca en Instagram (solo informa)
+            comprobar_en_instagram(graph, ig_id, media_id)
     return 1 if fallas else 0
 
 
+def _publicar_id(args, carpeta, repo, tz, token, abrir, reloj, dormir, activo) -> int:
+    """--id ID --ahora: publica ya esa Historia, sin mirar la ventana, desde.txt ni activo.txt."""
+    h = buscar_historia(repo, args.id, tz)
+    log(f"Historia {h.id}: programada {fmt_corto(h.programada)}, tanda-{h.tanda} ({h.origen}).")
+    log(f"  {h.url_jpg}")
+    verbo = "Publicaría ya" if args.simular else "Se publica ya"
+    log(f"{verbo}: no se miran la ventana de 6 h, desde.txt ni activo.txt. desde.txt no se toca.")
+    ruta_registro = carpeta / "registro.csv"
+    resumen = resumir_registro(leer_registro(ruta_registro))
+    est = resumen.get(h.id)
+    motivo = motivo_bloqueo_manual(est)
+    if motivo:
+        log(f"No se publica {h.id}: {motivo}. No se tocó el registro.")
+        return 1
+    if est and est.errores:
+        log(f"El registro tiene {est.errores} intento(s) fallido(s) de {h.id}; no salió nada, así que se intenta.")
+    if args.simular:
+        return _simular([h], token, abrir, activo)
+    return _publicar([h], resumen, token, abrir, reloj, dormir, ruta_registro, tz, manual=True)
+
+
+def _id_valido(texto: str) -> str:
+    texto = texto.strip()
+    if not PATRON_ID.fullmatch(texto):
+        raise argparse.ArgumentTypeError("usa solo letras, números, guion y guion bajo, p. ej. H-2026-12-13")
+    return texto
+
+
 def _argumentos(argv):
-    parser = argparse.ArgumentParser(description="Publica las Historias programadas de Apruébalo en Instagram.")
+    parser = argparse.ArgumentParser(
+        description="Publica las Historias programadas de Apruébalo en Instagram.",
+        epilog="--ahora tiene dos usos que no se mezclan: con fecha, solo junto a --simular (fija la hora "
+        "de la simulación); sin fecha, solo junto a --id (publicar ya esa Historia).",
+    )
     modo = parser.add_mutually_exclusive_group()
     modo.add_argument("--simular", action="store_true", help="no crea ni publica nada: lista y valida")
     modo.add_argument("--programado", action="store_true", help="corrida del flujo programado: exige programador/activo.txt")
-    parser.add_argument("--ahora", help="fija la hora (solo con --simular), p. ej. 2026-11-16T18:30 (hora de Chile)")
+    parser.add_argument("--id", type=_id_valido, metavar="ID",
+                        help="con --ahora sin fecha: publica ya esa Historia (p. ej. H-2026-12-13)")
+    parser.add_argument("--ahora", nargs="?", const=AHORA_YA, metavar="FECHA",
+                        help="con fecha y --simular: fija la hora (p. ej. 2026-11-16T18:30, hora de Chile); "
+                        "sin fecha y con --id: publicar ya")
     args = parser.parse_args(argv)
-    if args.ahora and not args.simular:
-        parser.error("--ahora solo se puede usar con --simular")
+    ya = args.ahora == AHORA_YA
+    if args.id is not None:
+        if args.programado:
+            parser.error("--id no se puede usar con --programado")
+        if args.ahora is None:
+            parser.error("--id va con --ahora (sin fecha) para publicar ya: --id ID --ahora")
+        if not ya:
+            parser.error("con --id, --ahora va sin fecha: --id ID --ahora")
+    elif ya:
+        parser.error("--ahora sin fecha solo va con --id (publicar ya); para simular otra hora usa --simular --ahora FECHA")
+    elif args.ahora is not None and not args.simular:
+        parser.error("--ahora con fecha solo se puede usar con --simular")
     return args
 
 
@@ -701,6 +828,8 @@ def main(argv=None, entorno=None, abrir=None, reloj=None, dormir=None, repo=None
 
     try:
         modo = "SIMULACIÓN" if args.simular else ("PROGRAMADO" if args.programado else "MANUAL (real)")
+        if args.id is not None:
+            modo = f"PUBLICAR YA {args.id}" + (" (SIMULACIÓN)" if args.simular else " (real)")
         log(f"Programador de Historias de Apruébalo - modo {modo}")
         # La pausa va primero: sin activo.txt, el programado termina bien pase lo que pase.
         activo = (carpeta / "activo.txt").exists()
@@ -711,8 +840,12 @@ def main(argv=None, entorno=None, abrir=None, reloj=None, dormir=None, repo=None
         if token and not re.fullmatch(r"[\x21-\x7e]+", token):
             raise ErrorConfig("META_TOKEN tiene caracteres no válidos (espacios o saltos de línea en medio)")
         tz = zona_chile()
-        ahora = leer_ahora(args.ahora, tz) if args.ahora else reloj().astimezone(tz)
+        con_fecha = args.ahora is not None and args.ahora != AHORA_YA
+        ahora = leer_ahora(args.ahora, tz) if con_fecha else reloj().astimezone(tz)
         log(f"Ahora: {fmt_corto(ahora)} hora de Chile (UTC{ahora.strftime('%z')[:3]}). Graph API {GRAPH_VERSION}.")
+
+        if args.id is not None:
+            return _publicar_id(args, carpeta, repo, tz, token, abrir, reloj, dormir, activo)
 
         desde = leer_desde(carpeta / "desde.txt")
         historias = cargar_historias(repo, desde, tz)
