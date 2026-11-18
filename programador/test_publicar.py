@@ -303,11 +303,20 @@ class PruebasTandaMasNueva(unittest.TestCase):
         self.assertTrue(por_fecha["2026-11-17"].url_jpg.endswith("/tanda-3/historias/H-2026-11-17.jpg"))
         self.assertEqual(por_fecha["2026-12-02"].tanda, 3)
         self.assertTrue(por_fecha["2026-12-02"].url_jpg.endswith("/tanda-3/historias/H-2026-12-02.jpg"))
-        # Entre el 16-11 y el 13-12 todo sale de tanda-3; después, de tanda-2.
+        # Entre el 16-11 y el 13-12 todo sale de tanda-3. Desde el 14-12 manda tanda-4 (Pedido 14: lunes,
+        # miércoles, viernes y domingo hasta el 28-02-2027); los otros días quedan las de tanda-2 (19, 22 y 26-12).
         for h in historias:
-            self.assertEqual(h.tanda, 3 if h.fecha <= date(2026, 12, 13) else 2, h.id)
+            if h.fecha <= date(2026, 12, 13):
+                esperada = 3
+            elif h.fecha.isoformat() in ("2026-12-19", "2026-12-22", "2026-12-26"):
+                esperada = 2
+            else:
+                esperada = 4
+            self.assertEqual(h.tanda, esperada, h.id)
         self.assertEqual(historias[0].id, "H-2026-11-16")
-        self.assertEqual(len(historias), 34)
+        self.assertEqual(historias[-1].id, "H-2027-02-28")
+        self.assertEqual(sum(1 for h in historias if h.tanda == 4), 42)
+        self.assertEqual(len(historias), 73)
         # Cada JPEG existe en el repositorio con la misma ruta que la URL.
         for h in historias:
             ruta = urllib.parse.urlsplit(h.url_jpg).path.split("/main/", 1)[1]

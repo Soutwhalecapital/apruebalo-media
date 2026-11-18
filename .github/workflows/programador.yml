@@ -4,10 +4,14 @@ name: Programador de Historias
 
 on:
   schedule:
-    # Hora de Chile: minutos 7 y 37 de cada hora entre las 12:00 y las 21:59.
-    # Se evita el minuto 0 porque GitHub atrasa las ejecuciones al empezar cada hora.
+    # Hora de Chile. Entre las 17:00 y las 19:59 (alrededor de la Historia de las 18:00) corre cada 10 minutos,
+    # en los minutos 2, 12, 22, 32, 42 y 52 (Pedido 14); el resto del día, en los minutos 7 y 37 entre las
+    # 12:00 y las 16:59 y entre las 20:00 y las 21:59. Se evitan el minuto 0 y los múltiplos de 5 porque
+    # GitHub atrasa más las ejecuciones en esos minutos, que son los que usa casi todo el mundo.
     # GitHub acepta "timezone" con nombres IANA y sigue solo el cambio de horario.
-    - cron: '7,37 12-21 * * *'
+    - cron: '7,37 12-16,20-21 * * *'
+      timezone: 'America/Santiago'
+    - cron: '2,12,22,32,42,52 17-19 * * *'
       timezone: 'America/Santiago'
   workflow_dispatch:
     inputs:

@@ -31,7 +31,7 @@ Cada 30 minutos, entre las 12:00 y las 21:59 hora de Chile, el flujo `.github/wo
 
 ## Cuándo corre
 
-`cron: '7,37 12-21 * * *'` con `timezone: 'America/Santiago'`: a las 12:07, 12:37, 13:07… hasta las 21:37, hora de Chile. GitHub acepta `timezone` con nombres IANA y sigue solo el cambio de horario de Chile (UTC-3 en verano, UTC-4 en invierno). Se evita el minuto 0 porque GitHub atrasa las ejecuciones al empezar cada hora.
+Dos líneas `cron` con `timezone: 'America/Santiago'` (Pedido 14): `'2,12,22,32,42,52 17-19 * * *'`, cada 10 minutos entre las 17:02 y las 19:52, alrededor de la Historia de las 18:00, y `'7,37 12-16,20-21 * * *'` el resto del día (12:07, 12:37… 16:37 y 20:07… 21:37), hora de Chile. Se evitan los minutos múltiplos de 5, los más cargados en GitHub. El criterio para quedarse con el programador (95 % de las Historias publicadas y atraso mediano de 15 minutos o menos) se mide con las Historias del 13 al 31-12-2026 en `registro.csv`. GitHub acepta `timezone` con nombres IANA y sigue solo el cambio de horario de Chile (UTC-3 en verano, UTC-4 en invierno). Se evita el minuto 0 porque GitHub atrasa las ejecuciones al empezar cada hora.
 
 GitHub puede atrasar una corrida programada, y en este repositorio lo hace mucho: entre el 09 y el 16-11-2026 corrió el cron solo 2 o 3 veces al día (de 20 previstas), con atrasos de hasta unas 7 horas. Aun así, todos esos días hubo al menos una corrida entre las 18:00 y las 24:00, a las 18:16 la más temprana y a las 21:19 la más tardía. O sea, con la ventana de 6 horas la Historia de las 18:00 habría salido con entre 16 y 199 minutos de atraso, y los días con una sola corrida en la ventana no hay tiempo para el reintento. Revisa `atraso_min` en el registro.
 
